@@ -7,6 +7,8 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 
 /**
   * Created by ac on 10/12/2017.
+  * how to run:
+  * IIDRSpark.main(inputArray)
   */
 object IIDRSpark extends App {
   // Constants and variables
@@ -14,6 +16,7 @@ object IIDRSpark extends App {
   val METADATA_FILE_NAME = "meta.dat"
   val DATA_FORMAT = "csv"
 
+  // not needed in practice
   val sc = new SparkContext()
   val spark = new SparkSession()
 
