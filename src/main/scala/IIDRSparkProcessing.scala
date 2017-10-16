@@ -1,3 +1,5 @@
+
+
 /**
   * will take 3 arguments, the 3rd is the array of input hdfs/local dirs to process
   *
@@ -10,17 +12,36 @@
   * @param inputDirs list of input local/hdfs dirs
   */
 class IIDRSparkProcessing(sc: org.apache.spark.SparkContext, spark: org.apache.spark.sql.SparkSession,
-                          inputDirs: Array[String]) {
+                          inputDirs: Array[String], schemaFile: String) {
 
   import java.io.File
 
   import org.apache.spark.sql.DataFrame
-  import org.apache.spark.sql.functions.{concat_ws, input_file_name, udf}
-  import org.apache.spark.sql.types.StructType
+  import org.apache.spark.sql.functions._
+  import org.apache.spark.sql.types.{StructType, _}
+  import spark.implicits._
 
-  val METADATA_END_INDEX = 1
-  val METADATA_FILE_NAME = "meta.dat"
+  import scala.util._
+
+  val METADATA_END_INDEX = 4
+  val METADATA_FILE_NAME = "meta.csv"
   val DATA_FORMAT = "csv"
+  val DELIM = "|"
+  val POST_COL_CNT = 1180
+  // private vars
+  private var _monolithDF: DataFrame = _
+  private var _postDF: DataFrame = _
+  private var _csvDF: DataFrame = _
+  private var indAr: Array[Int] = _
+
+  def indArray: Array[Int] = indAr
+
+  def postdf: DataFrame = _postDF
+
+  def csvdf: DataFrame = _csvDF
+
+  def monolithDF: DataFrame = _monolithDF
+
   // *** Functions
   /**
     * based on the command line args, generate a schema structure
@@ -29,13 +50,12 @@ class IIDRSparkProcessing(sc: org.apache.spark.SparkContext, spark: org.apache.s
     * @return
     */
   def getSchema(metaFile: String): StructType = {
-    import org.apache.spark.sql.types._
-    val metaDF = spark.read.format(DATA_FORMAT).option("header", "false").load("meta.dat")
-    val metaSchema = StructType(
-      metaDF.first.toSeq.toList.map
-      (i => i.asInstanceOf[String].trim).map(col => StructField(col, StringType))
+
+    val metaDF = spark.read.format(DATA_FORMAT).option("header", "true").option("delimiter", "|").load(metaFile)
+    StructType(
+      metaDF.map(r => r.getString(0)).collect().
+        map(c => Try(StructField(c, StringType))).filter(_.isSuccess).map(_.get)
     )
-    metaSchema
   }
 
   /**
@@ -74,32 +94,45 @@ class IIDRSparkProcessing(sc: org.apache.spark.SparkContext, spark: org.apache.s
 
     // ** Execution
     // get command line arguments passed a space separated list of dirs
-    val listOfInputDirs = sc.getConf.get("spark.driver.args").split("\\s+")
+    //    val listOfInputDirs = sc.getConf.get("spark.driver.args").split("\\s+")
 
     // option("inferSchema", "true") option("header","true").
-    val csvDF = spark.read.format(DATA_FORMAT).
-      option("delimiter", ",").
-      schema(getSchema(METADATA_FILE_NAME)).
-      load(listOfInputDirs: _*)
+    _csvDF = spark.read.format(DATA_FORMAT).
+      option("delimiter", DELIM).
+      load(inputDirs: _*)
 
-    val ind = createColIndexArray(csvDF)
+    indAr = createColIndexArray(_csvDF)
+
+    val removeDoubleQuotes = udf((x: String) => {
+      if (x == null) {
+        x
+      } else {
+        x.replace("\"", "").replace("\f", "").replaceAll("^\\s+", "").replaceAll("\\s+$", "")
+      }
+    })
 
     // get matching columns from DF
     // csvDF.columns => get all columns from df
     // map col => get these columns into an array
     // for the above array, get only the elements matching indexes from ind array
-    val postDF1 = csvDF.select(ind map csvDF.columns map csvDF.col: _*)
+    //    val postDF1 = csvDF.select(ind map csvDF.columns map csvDF.col: _*)
+    _postDF = _csvDF.select(indAr map _csvDF.columns map _csvDF.col: _*)
+
+    val postDF2 = _postDF.select(_postDF.columns.map(c => removeDoubleQuotes(_postDF.col(c)).alias(c)): _*)
+    val postDF3 = postDF2.select(postDF2.columns.map(c => regexp_replace(postDF2.col(c), "\\s+$", "").alias(c)): _*)
+    val postDF4 = postDF3.select(postDF3.columns.map(c => regexp_replace(postDF3.col(c), "^\\s+", "").alias(c)): _*)
+    // trim all columns
+    val postDF6 = postDF4.select(postDF4.columns.map(c => trim(postDF4.col(c)).alias(c)): _*)
+
     // add file name column
-    val postDF = postDF1.withColumn("fileName", udfFileName(input_file_name()))
+    val postDF = postDF6.withColumn("fileName", udfFileName(input_file_name()))
 
     // create a single column
     //concatenate, using smooch operator. converts a Seq of fieldNames to cols -> vararg
-    val monolithAddedDF = postDF.withColumn("monolith",
-      concat_ws("|", postDF.schema.fieldNames.map(fName => postDF.col(fName)): _*))
-    val monolithDF = monolithAddedDF.select(monolithAddedDF.col("monolith"))
+    val monolithAddedDF = postDF.withColumn("monolith", concat_ws("|", postDF.schema.fieldNames.map(fName => postDF.col(fName)): _*))
+    _monolithDF = monolithAddedDF.select(monolithAddedDF.col("monolith"))
 
-    monolithDF.printSchema
-    monolithDF.show(20, truncate = false)
+    _monolithDF.printSchema
 
     // write to HDFS with a single reducer
   }
