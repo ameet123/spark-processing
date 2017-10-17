@@ -1,5 +1,3 @@
-
-
 /**
   * will take 3 arguments, the 3rd is the array of input hdfs/local dirs to process
   *
