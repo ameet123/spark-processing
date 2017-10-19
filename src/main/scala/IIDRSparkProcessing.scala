@@ -32,12 +32,10 @@ class IIDRSparkProcessing(
   val METADATA_FILE_NAME = "meta.csv"
   val DATA_FORMAT = "csv"
   val DELIM = "|"
-  val IIDR_OUT_DIR = "iidr_post"
   val POST_COL_CNT = 1180
   val PK_HASH_SEP = "~"
 
   private var postPkStartIndex: Int = 0
-
 
   // private vars
   private var _monolithDF: DataFrame = _
@@ -84,7 +82,6 @@ class IIDRSparkProcessing(
     postPkStartIndex = (myDF.columns.length - 2) / 2
 
     println(s"Insert start: $postPkStartIndex :")
-
     val ind2 = ((myDF.columns.length - 2) / 2 until myDF.columns.length).toArray
     ind1 ++ ind2
   }
@@ -112,7 +109,7 @@ class IIDRSparkProcessing(
     }
     val pkHash = hashDigest(colString.toString())
     println(s"pk col string:${colString.toString()} pk Hash:$pkHash")
-    return pkHash
+    pkHash
   }
 
 
@@ -182,29 +179,13 @@ class IIDRSparkProcessing(
     pkHash
   }
 
+  /**
+    * main execution happens here
+    */
   def run(): Unit = {
     hadoopConf(sc)
     // UDFs
     val udfFileName = udf(getMatchingFileName)
-//    val f_hash = (r: Row) => {
-//      var operationPkStartIndex: Int = 0
-//      var operationPkEndIndex: Int = 0
-//      val op = r.getString(OPERATION_COL_INDEX)
-//      //      println(s"OP=$op PK_COL:$PK_COL_COUNT")
-//      if (op == "I") {
-//        operationPkStartIndex = postPkStartIndex
-//        operationPkEndIndex = operationPkStartIndex + PK_COL_COUNT - 1
-//      } else {
-//        operationPkStartIndex = METADATA_END_INDEX + 1
-//        operationPkEndIndex = operationPkStartIndex + PK_COL_COUNT - 1
-//      }
-//      //      println(s"Start:$operationPkStartIndex -> End:$operationPkEndIndex")
-//      val pkArray = (operationPkStartIndex to operationPkEndIndex).toArray
-//      val colString = joinPkCols(r, pkArray)
-//      val pkHash = hashDigest(colString)
-////      println(s"pk col string:${colString} pk Hash:$pkHash")
-//      pkHash
-//    }
     val pkHashUDF = udf(f_hash)
     val removeDoubleQuotes = udf((x: String) => {
       if (x == null) {
@@ -232,8 +213,6 @@ class IIDRSparkProcessing(
     val postDF7 = postDF2.withColumn("fileName", udfFileName(input_file_name()))
 
     _finalDF = postDF7.withColumn("pk_hash", pkHashUDF(struct(postDF7.columns.map(postDF7(_)): _*)))
-    //     _finalDF = postDF7
-
     _finalDF.write.format(DATA_FORMAT).save(outDir)
     _finalDF.printSchema
   }
